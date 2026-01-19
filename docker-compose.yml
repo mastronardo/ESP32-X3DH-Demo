@@ -1,0 +1,47 @@
+services:
+  wireguard:
+    image: linuxserver/wireguard:1.0.20250521
+    container_name: wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - GUID=1000
+      - TZ=Europe/Rome
+      - SERVERURL=auto
+      - SERVERPORT=51820
+      - PEERS=3 # Number of ESP32 clients to generate config for
+      - PEERDNS=auto
+      - INTERNAL_SUBNET=10.13.13.0
+      - ALLOWEDIPS=0.0.0.0/0
+    volumes:
+      - ./config/wireguard:/config
+      - ./update_wg_config.sh:/custom-cont-init.d/update_wg_config.sh
+    ports:
+      - "51820:51820/udp"
+    networks:
+      vpc_net:
+        ipv4_address: 10.10.0.2
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+  
+  server:
+    image: flask-server:3.1.2
+    container_name: Server-X3DH
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./server/server-data:/app/data
+    networks:
+      vpc_net:
+        ipv4_address: 10.10.0.5
+    restart: unless-stopped
+
+networks:
+  vpc_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/16
