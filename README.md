@@ -75,14 +75,14 @@ idf.py add-dependency "espressif/cjson^1.7.19"
 idf.py add-dependency "trombik/esp_wireguard^0.9.0"
 ```
 
-The most difficult regards the building of `libxeddsa` library for ESP-IDF, since it is not available in the Component Registry. The first step was to clone the repository inside the `components` directory.
+The most difficult regards the building of [libxeddsa](https://github.com/Syndace/libxeddsa) library for ESP-IDF, since it is not available in the Component Registry. The first step was to clone the repository inside the `components` directory.
 
 ```bash
 mkdir -p client/components && cd client/components
 git clone https://github.com/Syndace/libxeddsa.git
 ```
 
-After that, the following files inside the [libxeddsa](https://github.com/Syndace/libxeddsa) directory were been modified to make the library compatible with ESP-IDF: `CMakeLists.txt`, `ref10/CMakeLists.txt`, `ref10/include/cross_platform.h`. In addition, some files that were not needed for this project (for example _tests_ and _docs_), were deleted to free some space in the flash memory.
+After that, the following files inside the `libxeddsa` directory were been modified to make the library compatible with ESP-IDF: `CMakeLists.txt`, `ref10/CMakeLists.txt`, `ref10/include/cross_platform.h`. In addition, some files that were not needed for this project (for example _tests_ and _docs_), were deleted to free some space in the flash memory.
 
 ### sdkconfig
 `sdkconfig.defaults` was created to automatically generate the `sdkconfig` file when you open the `menuconfig` or set the target.
@@ -110,9 +110,11 @@ idf.py -p PORT erase-flash
 `Server` and `VPN Server` run inside Docker containers. Do not use `sudo` for the following commands if your user has permissions to run Docker commands.
 
 ```bash
-# Pull the base images
+# X3DH Server
 sudo docker pull python:3.14.2-alpine3.23
-cd server && sudo docker build -t flask-server:3.1.2 .
+cd server && sudo docker build -t x3dh-server:1.0 .
+
+# VPN Server
 sudo docker pull linuxserver/wireguard:1.0.20250521
 ```
 
@@ -148,9 +150,9 @@ python3 generate_keys.py <HOST_LOCAL_IP> <PEER_NUMBER>
 - **Runtime network notes:** `app_main.c` sets the WireGuard interface address from `WG_LOCAL_IP_ADDR` and, in the current code, forces a class-A netmask (`255.0.0.0`) and a gateway of `10.13.13.1`. The interface MTU is reduced to `1280` to prevent packet fragmentation/loss. If your network topology requires different netmask/gateway/MTU, update `keys.h` or modify `start_wireguard()` in `app_main.c` accordingly.
 
 > ⚠️ **Known Issue:** Due to **CGNAT** (Carrier-Grade NAT) used by mobile hotspot, the client may not be able to reach the WireGuard server. If you experience connectivity issues, please try to connect the MCU to a different network.
-  > If you are using a different client device (such as a PC), yet got the same issue, please check this [Kerem Erkan'post](https://keremerkan.net/posts/udp2raw-bypass-censoring-wireguard-protocol/).
+  > If you are using a different client device (such as a PC), yet got the same issue, please check this [Kerem Erkan's post](https://keremerkan.net/posts/udp2raw-bypass-censoring-wireguard-protocol/).
 
-> ⛔️ **Known Limitation:**: `esp_wireguard` does not support _Ethernet interface_.
+> ⛔️ **Known Limitation:** `esp_wireguard` does not support _Ethernet interface_.
 
 # How to run it
 1. Start the containers:
