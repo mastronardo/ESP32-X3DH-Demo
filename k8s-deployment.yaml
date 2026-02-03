@@ -1,0 +1,363 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: x3dh-project
+  labels:
+    app: rabbitmq
+spec:
+  clusterIP: None # Headless service for internal cluster communication
+  ports:
+  - port: 8883
+    name: mqtts
+  selector:
+    app: rabbitmq
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-client
+  namespace: x3dh-project
+  labels:
+    app: rabbitmq
+spec:
+  type: ClusterIP # Stable IP for Clients (ESP32/Server Python)
+  ports:
+  - port: 8883
+    targetPort: 8883
+    name: mqtts
+  selector:
+    app: rabbitmq
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: x3dh-project
+spec:
+  serviceName: "rabbitmq"
+  replicas: 3 # rabbitmq-0, rabbitmq-1, rabbitmq-2)
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      # This rule suggests K8s to spread pods across different nodes if available
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - rabbitmq
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: rabbitmq
+        image: rabbitmq:4.2-management-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8883
+          name: mqtts
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        env:
+        - name: RABBITMQ_ERLANG_COOKIE
+          value: "secret-cookie-x3dh"
+        - name: TZ
+          value: Europe/Rome
+        volumeMounts:
+        - name: certs
+          mountPath: /etc/rabbitmq/certs
+          readOnly: true
+        - name: config
+          mountPath: /etc/rabbitmq/conf.d/rabbitmq.conf
+          subPath: rabbitmq.conf
+        - name: config
+          mountPath: /etc/rabbitmq/enabled_plugins
+          subPath: enabled_plugins
+        - name: rabbitmq-data
+          mountPath: /var/lib/rabbitmq
+      volumes:
+      - name: certs
+        secret:
+          secretName: rabbitmq-certs
+      - name: config
+        configMap:
+          name: rabbitmq-config
+  volumeClaimTemplates:
+  - metadata:
+      name: rabbitmq-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: x3dh-project
+data:
+  rabbitmq.conf: |
+    listeners.tcp = none
+    mqtt.listeners.ssl.default = 8883
+    mqtt.allow_anonymous = true
+    
+    ssl_options.cacertfile = /etc/rabbitmq/certs/ca.crt
+    ssl_options.certfile = /etc/rabbitmq/certs/tls.crt
+    ssl_options.keyfile = /etc/rabbitmq/certs/tls.key
+    ssl_options.versions.1 = tlsv1.3
+    ssl_options.verify = verify_none
+    ssl_options.fail_if_no_peer_cert = false
+
+    # Limits enable cipher suites to only those used by TLSv1.3.
+    ssl_options.ciphers.1  = TLS_AES_256_GCM_SHA384
+    ssl_options.ciphers.2  = TLS_AES_128_GCM_SHA256
+    ssl_options.ciphers.3  = TLS_CHACHA20_POLY1305_SHA256
+    ssl_options.ciphers.4  = TLS_AES_128_CCM_SHA256
+    ssl_options.ciphers.5  = TLS_AES_128_CCM_8_SHA256
+
+    ssl_options.honor_cipher_order   = true
+    ssl_options.honor_ecc_order      = true
+  enabled_plugins: |
+    [rabbitmq_management, rabbitmq_mqtt].
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wg-init-script
+  namespace: x3dh-project
+data:
+  update_wg_config.sh: |
+    #!/bin/bash
+    CONFIG_FILE="/config/wg_confs/wg0.conf"
+    FLAG_FILE="/config/wg_confs/.wg_config_updated"
+    
+    # Check if the flag file exists. If it does, exit immediately.
+    if [ -f "$FLAG_FILE" ]; then
+        echo "Config already updated."
+        exit 0
+    fi
+
+    echo "First run detected. Updating WireGuard config..."
+
+    # Comment out PresharedKeys
+    if [ -f "$CONFIG_FILE" ]; then
+        # Backup
+        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+        
+        # Comment PSK
+        sed -i '/^[[:space:]]*#/!s/^[[:space:]]*PresharedKey/# &/' "$CONFIG_FILE"
+        
+        # Define New Rules
+        NEW_POSTUP="PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE; iptables -t mangle -A FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
+        NEW_POSTDOWN="PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE; iptables -t mangle -D FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
+
+        # Replace PostUp/PostDown
+        sed -i "s|^PostUp[[:space:]]*=.*|$NEW_POSTUP|" "$CONFIG_FILE"
+        sed -i "s|^PostDown[[:space:]]*=.*|$NEW_POSTDOWN|" "$CONFIG_FILE"
+        
+        echo "WireGuard config updated successfully."
+    else
+        echo "Config file not found at $CONFIG_FILE"
+    fi
+
+    # Create the flag file so this doesn't run again
+    touch "$FLAG_FILE"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x3dh-backend
+  namespace: x3dh-project
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: server
+        image: x3dh-server:1.1
+        imagePullPolicy: Never
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "512Mi"
+            cpu: "700m"
+        env:
+        - name: BROKER_HOST
+          value: "rabbitmq-client.x3dh-project.svc.cluster.local"
+        - name: BROKER_PORT
+          value: "8883"
+        - name: TZ
+          value: Europe/Rome
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: x3dh-db-cluster-app
+              key: host
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: x3dh-db-cluster-app
+              key: username
+        - name: DB_PASS
+          valueFrom:
+            secretKeyRef:
+              name: x3dh-db-cluster-app
+              key: password
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: x3dh-db-cluster-app
+              key: dbname
+        volumeMounts:
+        - name: certs
+          mountPath: /app/certs
+          readOnly: true
+      
+      volumes:
+      - name: certs
+        secret:
+          secretName: rabbitmq-certs
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-pvc
+  namespace: x3dh-project
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wireguard
+  namespace: x3dh-project
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # Ensures old pod dies before new one starts (prevents volume lock)
+  selector:
+    matchLabels:
+      app: wireguard
+  template:
+    metadata:
+      labels:
+        app: wireguard
+    spec:
+      containers:
+      - name: wireguard
+        image: linuxserver/wireguard:1.0.20250521
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN", "SYS_MODULE"]
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        env:
+        - name: PUID
+          value: "1000"
+        - name: GUID
+          value: "1000"
+        - name: TZ
+          value: Europe/Rome
+        - name: SERVERURL
+          value: auto
+        - name: SERVERPORT
+          value: "51820"
+        - name: PEERS
+          value: "<NUMBER_OF_CLIENTS>"
+        - name: PEERDNS
+          value: auto
+        - name: INTERNAL_SUBNET
+          value: "10.13.13.0"
+        - name: ALLOWEDIPS
+          value: "0.0.0.0/0"
+        ports:
+        - containerPort: 51820
+          protocol: UDP
+        # Add Liveness Probe to auto-restart if VPN hangs
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "wg show wg0 || exit 1"
+          initialDelaySeconds: 30
+          periodSeconds: 20
+
+        volumeMounts:
+        - name: wg-config
+          mountPath: /config
+        - name: init-script
+          mountPath: /custom-cont-init.d/update_wg_config.sh
+          subPath: update_wg_config.sh
+
+      volumes:
+      - name: wg-config
+        persistentVolumeClaim:
+          claimName: wg-pvc
+      - name: init-script
+        configMap:
+          name: wg-init-script
+          defaultMode: 0755
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wg-pvc
+  namespace: x3dh-project
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 200Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wireguard-nodeport
+  namespace: x3dh-project
+spec:
+  type: NodePort
+  ports:
+  - port: 51820
+    targetPort: 51820
+    nodePort: 30000
+    protocol: UDP
+  selector:
+    app: wireguard
