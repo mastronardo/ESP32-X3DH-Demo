@@ -1,0 +1,24 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: x3dh-db-cluster
+  namespace: x3dh-project
+spec:
+  instances: 3 # 1 Primary + 2 Replicas
+
+  postgresql:
+    parameters:
+      timezone: 'Europe/Rome'
+  
+  storage:
+    size: 2Gi
+    storageClass: standard
+
+  bootstrap:
+    initdb:
+      database: x3dh_db
+      owner: x3dh_user
+      
+  primaryUpdateStrategy: unsupervised
+  monitoring:
+    enablePodMonitor: true
