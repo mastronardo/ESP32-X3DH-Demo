@@ -1,380 +1,282 @@
-import sqlite3
-from flask import Flask, request, jsonify, g
+from os import path, getenv
+import sys
+import json
+import logging
+from time import sleep
+import ssl
+import paho.mqtt.client as mqtt
+from paho.mqtt.properties import Properties
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.enums import CallbackAPIVersion
+import psycopg
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
 
-app = Flask(__name__)
-DATABASE = '/app/data/database.db'
+# --- Configuration ---
+BROKER_HOST = getenv("BROKER_HOST", "rabbitmq")
+BROKER_PORT = int(getenv("BROKER_PORT", 8883))
+CERTS_PATH = '/app/certs'
 
-# --- Database Setup ---
-def get_db() -> sqlite3.Connection:
-    """Get a database connection, creating one if necessary.
-    Returns:
-        db: sqlite3.Connection
-    """
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
-    return db
+# Database Config from Environment Variables
+DB_HOST = getenv("DB_HOST", "<YOUR_DB_HOST>")
+DB_USER = getenv("DB_USER", "<YOUR_DB_USER>")
+DB_PASS = getenv("DB_PASS", "<YOUR_DB_PASSWORD>")
+DB_NAME = getenv("DB_NAME", "<YOUR_DB_NAME>")
 
-@app.teardown_appcontext
-def close_connection(exception) -> None:
-    """Close the database connection at the end of the request."""
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
+# Connection String
+DSN = f"host={DB_HOST} user={DB_USER} password={DB_PASS} dbname={DB_NAME} port=5432"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def init_database_on_startup() -> None:
-    """Initialize the database if it doesn't exist or is outdated."""
-    with app.app_context():
-        db = get_db()
+# --- Database Management ---
+pool = None
+
+def init_db():
+    logging.info("--- [Server] Initializing PostgreSQL Database ---")
+    retries = 5
+    while retries > 0:
         try:
-            # Check if our new chat_messages table exists
-            db.execute("SELECT id FROM chat_messages LIMIT 1").fetchone()
-        except sqlite3.OperationalError:
-            print("--- [Server] No database found or schema is old. Initializing... ---")
-            db.executescript(
-                """
-                DROP TABLE IF EXISTS users;
-                DROP TABLE IF EXISTS bundles;
-                DROP TABLE IF EXISTS opks;
-                DROP TABLE IF EXISTS initial_messages;
-                DROP TABLE IF EXISTS chat_messages;
-
-                CREATE TABLE users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    ik_b64 TEXT NOT NULL
-                );
+            # We use a pool for thread safety and performance
+            global pool
+            pool = ConnectionPool(conninfo=DSN, min_size=1, max_size=10, kwargs={"row_factory": dict_row})
+            pool.wait(timeout=5)
+            
+            with pool.connection() as conn:
+                conn.execute("SELECT 1") # Test connection
                 
-                CREATE TABLE bundles (
-                    user_id INTEGER PRIMARY KEY,
-                    spk_b64 TEXT NOT NULL,
-                    spk_sig_b64 TEXT NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users (id)
-                );
-                
-                CREATE TABLE opks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    key_id INTEGER NOT NULL,
-                    opk_b64 TEXT NOT NULL,
-                    UNIQUE(user_id, key_id),
-                    FOREIGN KEY (user_id) REFERENCES users (id)
-                );
-
-                CREATE TABLE initial_messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    to_user TEXT UNIQUE NOT NULL,
-                    from_user TEXT NOT NULL,
-                    ik_b64 TEXT NOT NULL,
-                    ek_b64 TEXT NOT NULL,
-                    opk_id INTEGER NOT NULL,
-                    ciphertext_b64 TEXT NOT NULL,
-                    ad_b64 TEXT NOT NULL,
-                    nonce_b64 TEXT NOT NULL
-                );
-
-                CREATE TABLE chat_messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    from_user TEXT NOT NULL,
-                    to_user TEXT NOT NULL,
-                    ciphertext_b64 TEXT NOT NULL,
-                    nonce_b64 TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                );
-                
-                CREATE INDEX idx_chat_messages_to_from ON chat_messages (to_user, from_user);
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                        username TEXT UNIQUE NOT NULL,
+                        ik_b64 TEXT NOT NULL
+                    );
                 """)
-            db.commit()
-            print("--- [Server] Database initialized. ---")
+                
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS bundles (
+                        user_id INTEGER PRIMARY KEY,
+                        spk_b64 TEXT NOT NULL,
+                        spk_sig_b64 TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users (id)
+                    );
+                """)
 
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS opks (
+                        id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                        user_id INTEGER NOT NULL,
+                        key_id INTEGER NOT NULL,
+                        opk_b64 TEXT NOT NULL,
+                        UNIQUE(user_id, key_id),
+                        FOREIGN KEY (user_id) REFERENCES users (id)
+                    );
+                """)
 
-# --- X3DH Registration Endpoints ---
-@app.route('/get_users', methods=['GET'])
-def get_users() -> jsonify:
-    """Retrieve a list of all registered usernames."""
-    db = get_db()
-    try:
-        rows = db.execute("SELECT username FROM users").fetchall()
-        user_list = [row['username'] for row in rows]
-        return jsonify(user_list), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS initial_messages (
+                        id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                        to_user TEXT UNIQUE NOT NULL,
+                        from_user TEXT NOT NULL,
+                        ik_b64 TEXT NOT NULL,
+                        ek_b64 TEXT NOT NULL,
+                        opk_id INTEGER NOT NULL,
+                        ciphertext_b64 TEXT NOT NULL,
+                        ad_b64 TEXT NOT NULL,
+                        nonce_b64 TEXT NOT NULL
+                    );
+                """)
 
-@app.route('/register_ik', methods=['POST'])
-def register_ik() -> jsonify:
-    """Register a user's identity key. Handles duplicate names."""
-    data = request.json
-    if not data or 'username' not in data or 'ik_b64' not in data:
-        return jsonify({"error": "Missing username or ik_b64"}), 400
-    
-    requested_username = data['username']
-    ik_b64 = data['ik_b64']
-    
-    db = get_db()
-    final_username = requested_username
-    
-    try:
-        counter = 1
-        while True:
-            existing = db.execute("SELECT id FROM users WHERE username = ?", (final_username,)).fetchone()
-            if not existing:
-                break
-            counter += 1
-            final_username = f"{requested_username}{counter}"
-
-        db.execute("INSERT INTO users (username, ik_b64) VALUES (?, ?)", (final_username, ik_b64))
-        db.commit()
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-    print(f"--- Registered: {final_username} (Requested: {requested_username}) ---")
-    
-    # Return the actual assigned username so the client can update NVS
-    return jsonify({"status": "created", "username": final_username}), 201
-
-@app.route('/register_bundle', methods=['POST'])
-def register_bundle() -> jsonify:
-    """Register a user's signed prekey bundle and one-time prekeys (OPKs).
-    Returns:
-        JSON response with status.
-    """
-    data = request.json
-    if not data or 'username' not in data or 'spk_b64' not in data or 'spk_sig_b64' not in data or 'opks_b64' not in data:
-        return jsonify({"error": "Missing bundle fields"}), 400
-
-    username = data['username']
-    spk_b64 = data['spk_b64']
-    spk_sig_b64 = data['spk_sig_b64']
-    opks = data['opks_b64'] # This is a list of {"id": int, "key": "b64..."}
-
-    db = get_db()
-    
-    user = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-    if not user:
-        return jsonify({"error": "User {} not found. Register IK first.".format(username)}), 404
-    
-    user_id = user['id']
-
-    try:
-        with db:
-            # 1. Insert/update the signed prekey bundle
-            db.execute("""
-                INSERT INTO bundles (user_id, spk_b64, spk_sig_b64) 
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    spk_b64 = excluded.spk_b64,
-                    spk_sig_b64 = excluded.spk_sig_b64
-            """, (user_id, spk_b64, spk_sig_b64))
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS chat_messages (
+                        id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                        from_user TEXT NOT NULL,
+                        to_user TEXT NOT NULL,
+                        ciphertext_b64 TEXT NOT NULL,
+                        nonce_b64 TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+                
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_msg ON chat_messages (to_user, from_user);")
             
-            # 2. Delete old OPKs
-            db.execute("DELETE FROM opks WHERE user_id = ?", (user_id,))
-            
-            # 3. Insert new OPKs
-            opk_data = [(user_id, opk['id'], opk['key']) for opk in opks]
-            db.executemany("""
-                INSERT INTO opks (user_id, key_id, opk_b64)
-                VALUES (?, ?, ?)
-            """, opk_data)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            logging.info("--- [Server] Database Ready ---")
+            break
+        except Exception as e:
+            logging.error(f"FATAL: Could not connect to PostgreSQL: {e}")
+            retries -= 1
+            sleep(5)
+            if retries == 0:
+                sys.exit(1)
 
-    return jsonify({"status": "bundle created"}), 201
-
-@app.route('/get_bundle/<username>', methods=['GET'])
-def get_bundle(username) -> jsonify:
-    """Retrieve a user's signed prekey bundle and one-time prekey (OPK).
-    Returns:
-        JSON response with the bundle and one OPK.
-    """
-    db = get_db()
-    
-    # 1. Get user_id and main bundle
-    bundle_data = db.execute(
-        """
-        SELECT u.id, u.ik_b64, b.spk_b64, b.spk_sig_b64
-        FROM users u
-        LEFT JOIN bundles b ON u.id = b.user_id
-        WHERE u.username = ?
-        """, (username,)).fetchone()
-
-    if not bundle_data or not bundle_data['spk_b64']:
-        return jsonify({"error": "No bundle found for user {}".format(username)}), 404
-    
-    user_id = bundle_data['id']
-    
-    # 2. Get one OPK and delete it
-    opk_data = None
-    opk_id = -1
-    
-    try:
-        with db:
-            # Find one OPK
-            opk_data_row = db.execute(
-                "SELECT id, key_id, opk_b64 FROM opks WHERE user_id = ? LIMIT 1", (user_id,)
-            ).fetchone()
-            
-            if opk_data_row:
-                opk_data = dict(opk_data_row)
-                opk_id = opk_data['key_id']
-                db.execute("DELETE FROM opks WHERE id = ?", (opk_data['id'],))
-
-    except Exception as e:
-        print(f"Error fetching OPK: {e}")
-        # Continue without an OPK
-    
-    # 3. Format response
-    response = {
-        "ik_b64": bundle_data['ik_b64'],
-        "spk_b64": bundle_data['spk_b64'],
-        "spk_sig_b64": bundle_data['spk_sig_b64'],
-    }
-    
-    if opk_data:
-        response["opk_id"] = opk_data['key_id']
-        response["opk_b64"] = opk_data['opk_b64']
+# --- MQTT Event Handlers ---
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    if reason_code == 0:
+        logging.info("--- [Server] Connected to MQTT Broker ---")
+        topics = [
+            ("x3dh/register/ik", 1),
+            ("x3dh/register/bundle", 1),
+            ("x3dh/req/users", 1),
+            ("x3dh/req/bundle/+", 1),
+            ("x3dh/msg/init", 1),
+            ("x3dh/req/inbox/+", 1),
+            ("x3dh/msg/chat", 1),
+            ("x3dh/req/chat", 1)
+        ]
+        client.subscribe(topics)
     else:
-        response["opk_id"] = -1 # Signal that no OPK was available
+        logging.error(f"--- [Server] Connection failed with code {reason_code} ---")
 
-    return jsonify(response)
-
-
-# --- X3DH Initial Message Endpoints ---
-@app.route('/send_initial_message', methods=['POST'])
-def send_initial_message() -> jsonify:
-    """Send an initial X3DH message to a user to start a new chat.
-    Returns:
-        JSON response with status.
-    """
-    data = request.json
-    to_user = data.get('to')
-    from_user = data.get('from')
-    ik_b64 = data.get('ik_b64')
-    ek_b64 = data.get('ek_b64')
-    opk_id = data.get('opk_id')
-    ciphertext_b64 = data.get('ciphertext_b64')
-    ad_b64 = data.get('ad_b64')
-    nonce_b64 = data.get('nonce_b64')
-
-    if not all([to_user, from_user, ik_b64, ek_b64, ciphertext_b64, ad_b64, nonce_b64]) or opk_id is None:
-        return jsonify({"error": "Missing fields for initial message"}), 400
-    
-    db = get_db()
-    if not db.execute("SELECT id FROM users WHERE username = ?", (to_user,)).fetchone():
-        return jsonify({"error": "Recipient not found"}), 404
+def on_message(client, userdata, msg):
+    topic = msg.topic
     
     try:
-        db.execute(
-            """
-            INSERT INTO initial_messages (to_user, from_user, ik_b64, ek_b64, opk_id, ciphertext_b64, ad_b64, nonce_b64)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(to_user) DO UPDATE SET
-                from_user = excluded.from_user,
-                ik_b64 = excluded.ik_b64,
-                ek_b64 = excluded.ek_b64,
-                opk_id = excluded.opk_id,
-                ciphertext_b64 = excluded.ciphertext_b64,
-                ad_b64 = excluded.ad_b64,
-                nonce_b64 = excluded.nonce_b64
-            """, (to_user, from_user, ik_b64, ek_b64, opk_id, ciphertext_b64, ad_b64, nonce_b64))
-        db.commit()
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        payload = json.loads(msg.payload.decode())
+    except json.JSONDecodeError:
+        return
 
-    return jsonify({"status": "initial message delivered"}), 201
+    response_topic = None
+    correlation_data = None
+    if hasattr(msg, 'properties'):
+        if hasattr(msg.properties, 'ResponseTopic'):
+            response_topic = msg.properties.ResponseTopic
+        if hasattr(msg.properties, 'CorrelationData'):
+            correlation_data = msg.properties.CorrelationData
 
-@app.route('/get_initial_message/<username>', methods=['GET'])
-def get_initial_message(username) -> jsonify:
-    """Retrieve and delete the initial X3DH message for a user.
-    Returns:
-        JSON response with the initial message fields.
-    """
-    db = get_db()
-    message = db.execute(
-        """
-        SELECT from_user, ik_b64, ek_b64, opk_id, ciphertext_b64, ad_b64, nonce_b64
-        FROM initial_messages 
-        WHERE to_user = ?
-        """, (username,)).fetchone()
-
-    if not message:
-        return jsonify({"error": "No initial message found"}), 404
-    
-    db.execute("DELETE FROM initial_messages WHERE to_user = ?", (username,))
-    db.commit()
-    return jsonify(dict(message))
-
-
-# --- Post-X3DH Chat Message Endpoints ---
-@app.route('/send_chat_message', methods=['POST'])
-def send_chat_message() -> jsonify:
-    """Send a chat message from one user to another.
-    Returns:
-        JSON response with status.
-    """
-    data = request.json
-    from_user = data.get('from')
-    to_user = data.get('to')
-    ciphertext_b64 = data.get('ciphertext_b64')
-    nonce_b64 = data.get('nonce_b64')
-
-    if not all([from_user, to_user, ciphertext_b64, nonce_b64]):
-        return jsonify({"error": "Missing chat message fields"}), 400
-
-    db = get_db()
+    response = {}
     
     try:
-        db.execute(
-            """
-            INSERT INTO chat_messages (from_user, to_user, ciphertext_b64, nonce_b64)
-            VALUES (?, ?, ?, ?)
-            """, (from_user, to_user, ciphertext_b64, nonce_b64))
-        db.commit()
+        # Get a fresh connection from the pool
+        with pool.connection() as conn:            
+            if topic == "x3dh/req/users":
+                rows = conn.execute("SELECT username FROM users").fetchall()
+                response = {"users": [row['username'] for row in rows]}
+
+            elif topic == "x3dh/register/ik":
+                req_user = payload.get("username")
+                ik_b64 = payload.get("ik_b64")
+                if req_user and ik_b64:
+                    final_user = req_user
+                    counter = 1
+                    while True:
+                        exists = conn.execute("SELECT 1 FROM users WHERE username = %s", (final_user,)).fetchone()
+                        if not exists: break
+                        counter += 1
+                        final_user = f"{req_user}{counter}"
+                    conn.execute("INSERT INTO users (username, ik_b64) VALUES (%s, %s)", (final_user, ik_b64))
+                    response = {"status": "created", "username": final_user}
+                else:
+                    response = {"error": "Missing fields"}
+
+            elif topic == "x3dh/register/bundle":
+                username = payload.get("username")
+                opks = payload.get("opks_b64", []) 
+                user_row = conn.execute("SELECT id FROM users WHERE username = %s", (username,)).fetchone()
+                if user_row:
+                    user_id = user_row['id']
+                    conn.execute("""
+                        INSERT INTO bundles (user_id, spk_b64, spk_sig_b64) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT(user_id) DO UPDATE SET
+                            spk_b64 = excluded.spk_b64,
+                            spk_sig_b64 = excluded.spk_sig_b64
+                    """, (user_id, payload.get("spk_b64"), payload.get("spk_sig_b64")))
+                    
+                    conn.execute("DELETE FROM opks WHERE user_id = %s", (user_id,))
+                    opk_data = [(user_id, opk['id'], opk['key']) for opk in opks]
+                    conn.cursor().executemany("INSERT INTO opks (user_id, key_id, opk_b64) VALUES (%s, %s, %s)", opk_data)
+                    response = {"status": "bundle created"}
+                else:
+                    response = {"error": "User not found"}
+
+            elif topic.startswith("x3dh/req/bundle/"):
+                target_user = topic.split("/")[-1]
+                row = conn.execute("""
+                    SELECT u.id, u.ik_b64, b.spk_b64, b.spk_sig_b64
+                    FROM users u LEFT JOIN bundles b ON u.id = b.user_id
+                    WHERE u.username = %s
+                """, (target_user,)).fetchone()
+                
+                if row and row['spk_b64']:
+                    res_data = {"ik_b64": row['ik_b64'], "spk_b64": row['spk_b64'], "spk_sig_b64": row['spk_sig_b64'], "opk_id": -1}
+                    opk_row = conn.execute("SELECT id, key_id, opk_b64 FROM opks WHERE user_id = %s LIMIT 1", (row['id'],)).fetchone()
+                    if opk_row:
+                        res_data["opk_id"] = opk_row["key_id"]
+                        res_data["opk_b64"] = opk_row["opk_b64"]
+                        conn.execute("DELETE FROM opks WHERE id = %s", (opk_row['id'],))
+                    response = res_data
+                else:
+                    response = {"error": "Bundle not found"}
+
+            elif topic == "x3dh/msg/init":
+                to_user = payload.get('to')
+                if to_user:
+                    conn.execute("""
+                        INSERT INTO initial_messages (to_user, from_user, ik_b64, ek_b64, opk_id, ciphertext_b64, ad_b64, nonce_b64)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(to_user) DO UPDATE SET
+                            from_user=excluded.from_user, ik_b64=excluded.ik_b64, ek_b64=excluded.ek_b64,
+                            opk_id=excluded.opk_id, ciphertext_b64=excluded.ciphertext_b64, 
+                            ad_b64=excluded.ad_b64, nonce_b64=excluded.nonce_b64
+                    """, (to_user, payload.get('from'), payload.get('ik_b64'), payload.get('ek_b64'),
+                        payload.get('opk_id'), payload.get('ciphertext_b64'), payload.get('ad_b64'), payload.get('nonce_b64')))
+                    response = {"status": "delivered"}
+                else:
+                    response = {"error": "Missing 'to' field"}
+
+            elif topic.startswith("x3dh/req/inbox/"):
+                username = topic.split("/")[-1]
+                row = conn.execute("SELECT from_user, ik_b64, ek_b64, opk_id, ciphertext_b64, ad_b64, nonce_b64 FROM initial_messages WHERE to_user = %s", (username,)).fetchone()
+                if row:
+                    response = row # Already a dict due to row_factory
+                    conn.execute("DELETE FROM initial_messages WHERE to_user = %s", (username,))
+                else:
+                    response = {"error": "Empty inbox", "code": 404}
+
+            elif topic == "x3dh/msg/chat":
+                conn.execute("INSERT INTO chat_messages (from_user, to_user, ciphertext_b64, nonce_b64) VALUES (%s, %s, %s, %s)", 
+                             (payload.get('from'), payload.get('to'), payload.get('ciphertext_b64'), payload.get('nonce_b64')))
+                response = {"status": "delivered"}
+
+            elif topic == "x3dh/req/chat":
+                rows = conn.execute("SELECT id, ciphertext_b64, nonce_b64 FROM chat_messages WHERE to_user = %s AND from_user = %s ORDER BY timestamp ASC", 
+                                    (payload.get("to"), payload.get("from"))).fetchall()
+                response = [{"ciphertext_b64": r["ciphertext_b64"], "nonce_b64": r["nonce_b64"]} for r in rows]
+                if rows:
+                    ids = [r['id'] for r in rows]
+                    conn.execute("DELETE FROM chat_messages WHERE id = ANY(%s)", (ids,))
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error processing {topic}: {e}")
+        response = {"error": str(e)}
 
-    return jsonify({"status": "chat message delivered"}), 201
-
-
-@app.route('/get_chat_messages/<to_user>/from/<from_user>', methods=['GET'])
-def get_chat_messages(to_user, from_user) -> jsonify:
-    """Retrieve and delete all chat messages sent from one user to another.
-    Returns:
-        JSON response with a list of messages.
-    """
-    db = get_db()
-    messages = []
-    
-    try:
-        with db:
-            # 1. Select all messages for the user from the sender
-            rows = db.execute(
-                """
-                SELECT id, ciphertext_b64, nonce_b64, timestamp
-                FROM chat_messages
-                WHERE to_user = ? AND from_user = ?
-                ORDER BY timestamp ASC
-                """, (to_user, from_user)).fetchall()
-            
-            if not rows:
-                return jsonify([]), 200
-            
-            messages = [dict(row) for row in rows]
-            
-            # 2. Delete the messages that were just fetched
-            ids_to_delete = [row['id'] for row in rows]
-            db.executemany("DELETE FROM chat_messages WHERE id = ?", [(id,) for id in ids_to_delete])
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    # Return only ciphertext and nonce
-    response_messages = [{"ciphertext_b64": m["ciphertext_b64"], "nonce_b64": m["nonce_b64"]} for m in messages]
-    return jsonify(response_messages), 200
-
+    if response_topic:
+        reply_props = Properties(PacketTypes.PUBLISH)
+        if correlation_data: reply_props.CorrelationData = correlation_data
+        client.publish(response_topic, json.dumps(response), properties=reply_props)
 
 if __name__ == '__main__':
-    init_database_on_startup()
-    app.run(host='0.0.0.0', port=5001, debug=False)
+    init_db()
+    
+    # --- MQTT Client Setup ---
+    client = mqtt.Client(client_id="x3dh-backend-service", protocol=mqtt.MQTTv5, callback_api_version=CallbackAPIVersion.VERSION2)
+    client.on_connect = on_connect
+    client.on_message = on_message
+
+    ca_cert = path.join(CERTS_PATH, "ca.crt")
+    server_cert = path.join(CERTS_PATH, "tls.crt")
+    server_key = path.join(CERTS_PATH, "tls.key")
+
+    # Configure TLS if certs are available
+    if path.exists(ca_cert) and path.exists(server_cert):
+        print(f"--- [Server] Loading certs from {CERTS_PATH} ---")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.load_verify_locations(cafile=ca_cert)
+        context.load_cert_chain(certfile=server_cert, keyfile=server_key)
+        context.check_hostname = False 
+        context.verify_mode = ssl.CERT_NONE
+        client.tls_set_context(context)
+
+    print(f"--- [Server] Connecting to {BROKER_HOST}:{BROKER_PORT} ---", flush=True)
+    client.connect(BROKER_HOST, BROKER_PORT, 60)
+    client.loop_forever()
