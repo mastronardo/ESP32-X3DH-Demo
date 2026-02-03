@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 # 1. Define the source files for the xeddsa library
 set(xeddsa_sources
     src/ed25519.c
