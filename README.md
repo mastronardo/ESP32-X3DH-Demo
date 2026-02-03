@@ -1,7 +1,9 @@
 # X3DH implementation for ESP32
-A demo with native C implementation of X3DH Key Agreement Protocol for ESP32. The project consists of a `Server`, `VPN Server`, and `Clients`. The `Server` is built using Python and Flask framework, and it runs inside a Docker container. The `VPN Server` is built using WireGuard and it also runs inside a Docker container. The `Client` is built using ESP-IDF framework and runs on an ESP32 microcontroller. The `Clients` connect to the `Server` via the `VPN Server` to securely perform the X3DH Key Agreement Protocol. HTTP is used for the communication between the `Clients` and the `Server`.
+A demo with native C implementation of X3DH Key Agreement Protocol for ESP32.
 
-## Specifications
+This project demonstrates how to securely communicate ESP32 microcontrollers using the X3DH Key Agreement Protocol over **MQTTS**, leveraging a **VPN connection** established via WireGuard. The architecture consists of an `X3DH Server`, a `VPN Server`, a `RabbitMQ` message broker, and a `PostgreSQL` database, all orchestrated using `minikube` to create a local Kubernetes cluster.
+
+## Specifications :desktop_computer:
 `Host`'s specifications:
 - OS: macOS 26.2
 - Architecture: arm64
@@ -10,24 +12,35 @@ A demo with native C implementation of X3DH Key Agreement Protocol for ESP32. Th
 - Command Line Tools for Xcode: 26.2
 - Python: 3.12.10 (at least 3.9)
 - clang: 17.0.0
-- cmake: 4.2.1 (at least 3.16)
+- cmake: 4.2.3 (at least 3.20)
 - ninja: 1.13.2
 - ccache: 4.12.2
 - git: 2.52.0
 - dfu-util: 0.11
-- Docker Desktop: 4.57.0
-  - Engine: 29.1.3
-  - Compose: 5.0.1
+- OpenSSL: 3.6.1
+- Docker Desktop: 4.59.1
+- minikube: 1.38.0
+  - Kubernetes: 1.35.0
+  - Docker: 29.2.0
 
-`Server`'s specifications:
+`X3DH Server`'s specifications:
 - OS: Alpine Linux 3.23.2
-- Python: 3.14.2
-- Flask: 3.1.2
-- SQLite: 3.51.1
+- Python: 3.13.11
+- OpenSSL: 3.5.4
 
 `VPN Server`'s specifications:
 - OS: Alpine Linux 3.23.2
 - WireGuard: 1.0.20250521
+
+`RabbitMQ`'s specifications:
+- OS: Alpine Linux 3.23.2
+- RabbitMQ: 4.2.3 (at least 4.0.4)
+- Erlang: 27.3.4.6
+- OpenSSL: 3.5.4
+
+`PostgreSQL`'s specifications:
+- OS: Debian GNU/Linux 13.3
+- postgres: 18.1
 
 `ESP32`'s specifications:
 - MCU module: ESP32-WROOM-32E
@@ -39,8 +52,9 @@ A demo with native C implementation of X3DH Key Agreement Protocol for ESP32. Th
 - libxeddsa: 2.0.1
 - MbedTLS: 3.6.4
 - esp_wireguard: 0.9.0
+- ESP-MQTT: 1.0.0
 
-## macOS issues
+## macOS issues :sos:
 
 If you are using `macOS`: 
 1. make sure to update the Python certificates. To make it easier, I strongly suggest to download Python from the official website, instead of using HomeBrew/MacPorts, and then run the following commands in your terminal:
@@ -52,12 +66,13 @@ cd /Applications/Python\ 3.x/
 
 2. if you cannot see the ESP32 serial port after connecting it via USB, you might need to install the appropriate drivers. You could try to install the [WCH34 driver](https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html) and follow the installation guide from the official [repository](https://github.com/WCHSoftGroup/ch34xser_macos), or you could try to install the [Silicon Labs CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers).
 
-# How to build it
+3. if you are using `minikube` with the `docker` driver, and you are facing this error _ERROR KubeletVersion_, you might need to execute this script: `down_service.sh`.
+
+# How to build it 🛠️
 
 ```bash
 git clone https://github.com/mastronardo/ESP32-X3DH-Demo.git
-cd ESP32-X3DH-Demo
-chmod +x start_service.sh stop_service.sh down_service.sh update_wg_config.sh
+cd ESP32-X3DH-Demo && chmod +x create_cluster.sh gen_certs.sh
 ```
 
 ## Client
@@ -73,9 +88,11 @@ pip install -U idf-component-manager # be sure to keep the component Manager upd
 idf.py add-dependency "espressif/libsodium^1.0.20~3"
 idf.py add-dependency "espressif/cjson^1.7.19"
 idf.py add-dependency "trombik/esp_wireguard^0.9.0"
+idf.py add-dependency "espressif/mqtt^1.0.0"
 ```
 
-The most difficult regards the building of [libxeddsa](https://github.com/Syndace/libxeddsa) library for ESP-IDF, since it is not available in the Component Registry. The first step was to clone the repository inside the `components` directory.
+Since [libxeddsa](https://github.com/Syndace/libxeddsa) library is not available in the Component Registry, it was necessary to manually build it for ESP-IDF.
+The first step was to clone the repository inside the `components` directory.
 
 ```bash
 mkdir -p client/components && cd client/components
@@ -85,17 +102,24 @@ git clone https://github.com/Syndace/libxeddsa.git
 After that, the following files inside the `libxeddsa` directory were been modified to make the library compatible with ESP-IDF: `CMakeLists.txt`, `ref10/CMakeLists.txt`, `ref10/include/cross_platform.h`. In addition, some files that were not needed for this project (for example _tests_ and _docs_), were deleted to free some space in the flash memory.
 
 ### sdkconfig
-`sdkconfig.defaults` was created to automatically generate the `sdkconfig` file when you open the `menuconfig` or set the target.
+`sdkconfig.defaults` was created to automatically generate the ready-to-use `sdkconfig` file when you open the `menuconfig` or _set the target_.
 1. To make sure that the client binary executable file will fit inside the flash memory of the ESP32, and to avoid stack overflow issue when running the project, these parameters were set:
-  - `(Top)` ---> `Partition Table` ---> `Partition Table` ---> `Two large size OTA partitions`
-  - `(Top)` ---> `Serial Flasher Config` ---> `Flash size` ---> `4MB`
-  - `(Top)` ---> `Component config` ---> `ESP System Settings` --> `Main task stack size` ---> `10240`
-2. To enable the HKDF algorithm required by the X3DH Key Agreement Protocol:
-  - `(Top)` ---> `Component config` ---> `mbedTLS` ---> `HKDF algorithm (RFC 5869)`
-3. To enable the PPP support needed by the **esp_wireguard** component:
-  - `(Top)` ---> `Component config` ---> `LWIP` ---> `Enable PPP support`
-4. Since "_IPv6 support is alpha and probably broken_" in **esp_wireguard** component, it is recommended to disable it:
-  - `(Top)` ---> `Component config` ---> `LWIP` ---> `Enable IPv6`
+  - `(Top)` → `Partition Table` → `Partition Table` → `Two large size OTA partitions`
+  - `(Top)` → `Serial Flasher Config` → `Flash size` → `4MB`
+  - `(Top)` → `Component config` → `ESP System Settings` → `Main task stack size` → `12288`
+  - `(Top)` → `Component config` → `LWIP` → `TCP/IP Task Stack Size` → `4096`
+2. To enable the HKDF algorithm required by the X3DH Key Agreement Protocol and TLSv1.3:
+  - `(Top)` → `Component config` → `mbedTLS` → `HKDF algorithm (RFC 5869)`
+3. Since "_IPv6 support is alpha and probably broken_" in **esp_wireguard** component, it is recommended to disable it:
+  - `(Top)` → `Component config` → `LWIP` → `Enable IPv6` _(disable)_
+4. To enable the PPP support needed by the **esp_wireguard** component:
+  - `(Top)` → `Component config` → `LWIP` → `Enable PPP support`
+5. To enable MQTT 5.0 and disable MQTT 3.1.1:
+  - `(Top)` → `Component config` → `ESP-MQTT Configurations` → `Enable MQTT protocol 5.0`
+  - `(Top)` → `Component config` → `ESP-MQTT Configurations` → `Enable MQTT protocol 3.1.1` _(disable)_
+6. To force using TLSv1.3:
+  - `(Top)` → `Component config` → `mbedTLS` → `mbedTLS v3.x related` → `Support TLS 1.3 protocol`
+  - `(Top)` → `Component config` → `mbedTLS` → `Support TLS 1.2 protocol` _(disable)_
 
 ### Erase flash memory
 Since we are going to store the keys in the NVS memory, it is recommended to erase the flash:
@@ -106,74 +130,79 @@ Since we are going to store the keys in the NVS memory, it is recommended to era
 idf.py -p PORT erase-flash
 ```
 
-## X3DH Server and VPN Server
-`Server` and `VPN Server` run inside Docker containers. Do not use `sudo` for the following commands if your user has permissions to run Docker commands.
+## Minikube :whale:
+Make sure to have `minikube` installed on your machine. You can follow the official guide [here](https://minikube.sigs.k8s.io/docs/start/). The choice to use **minikube** is influenced by the fact that is a lightweight K8s instance that can be easily set up on a local machine, making it ideal for development and testing purposes. It allows us to create a local Kubernetes cluster without the need for complex infrastructure, which is perfect for this demo.
+
+### X3DH Server
+The X3DH server is implemented in Python and runs inside a lean Docker container. To build the Docker image, you need to pull the base image and then build the custom image using the provided `Dockerfile`. The server interacts with a PostgreSQL database to store user info and uses TLSv1.3 for secure communication with broker. The database password can be retrieved from the Kubernetes secret created during the cluster setup.
 
 ```bash
-# X3DH Server
-sudo docker pull python:3.14.2-alpine3.23
-cd server && sudo docker build -t x3dh-server:1.0 .
-
-# VPN Server
-sudo docker pull linuxserver/wireguard:1.0.20250521
+# do not use sudo if your user has permissions to run docker commands
+sudo docker pull python:3.13.11-alpine3.23
+sudo docker build -t x3dh-server:1.1 ./server
 ```
 
-```bash
-# Build all the containers and start the service.
-# Wait until the server is fully started.
-./start_service.sh
-```
-
-```bash
-# To stop the service
-./stop_service.sh
-```
-
-```bash
-# To stop and delete containers, networks and volumes
-./down_service.sh
-```
-
-## VPN Configuration
+### VPN Configuration
 Since the [esp_wireguard](https://github.com/trombik/esp_wireguard) repository is no longer maintained, if you try to use the component as it is, you are going to face issues with the newest versions of ESP-IDF. Mainly thanks to [issues](https://github.com/trombik/esp_wireguard/issues) opened during 2025, and [Kerem Erkan's post](https://keremerkan.net/posts/wireguard-mtu-fixes/) about MTU fixes, it was possible to make the component work again.
 
 - **Overview:** the MCU performs NTP time synchronization and initializes the WireGuard tunnel. All runtime parameters used by the client are provided via the generated header `keys.h`.
 
-- **Generate `keys.h`:** `generate_keys.py` extracts the required values from the WireGuard container `wg0.conf` and writes them to `client/main/keys.h`. You need to provide two arguments: the **host's local IP address** where the Docker containers are running, and the **peer number** assigned in the WireGuard server configuration, starting from 1.
+- **Generate `keys.h`:** `generate_keys.py` extracts the required information from WireGuard and RabbitMQ containers, and writes them to `client/main/keys.h`. You need to provide two arguments: the **host's local IP address** where the Minikube cluster is running, and the **peer number** assigned in the WireGuard server configuration (starting from 1).
 
+- **Preshared Key (PSK) compatibility:** the `esp_wireguard` client used does not support `PresharedKey`. For that reason the helper script `update_wg_config.sh` (embedded in `k8s-deployment.yaml`) comments out `PresharedKey` lines in the server configuration and replaces `PostUp`/`PostDown` rules to ensure proper forwarding/NAT and add an MSS clamp to avoid MTU issues. The script writes a flag file so it runs only once.
+
+- **Runtime network notes:** `app_main.c` sets the WireGuard interface address from `WG_LOCAL_IP_ADDR` and, in the current code, forces a class-A netmask (`255.0.0.0`) and a gateway of `10.13.13.1`. The interface MTU is reduced to `1280` to prevent packet fragmentation/loss. If your network topology requires different netmask/gateway/MTU, update `keys.h` or modify `start_wireguard()` in `app_main.c` accordingly.
+
+> :warning: **Known Issue:** Due to **CGNAT** (Carrier-Grade NAT) used by mobile hotspot, the client may not be able to reach the WireGuard server. If you experience connectivity issues, please try to connect the MCU to a different network.
+  > If you are using a different client device (such as a PC), yet got the same issue, please check this [Kerem Erkan's post](https://keremerkan.net/posts/udp2raw-bypass-censoring-wireguard-protocol/).
+
+> :no_entry: **Known Limitation:** **esp_wireguard** does not support _Ethernet interface_.
+
+### RabbitMQ :rabbit:
+The RabbitMQ message broker it is used to reduce the load on requests that were previously sent directly to the server, and to use a lighter protocol that is better suited to the IoT ecosystem (_MQTT_). The broker is configured to use TLSv1.3 for secure communication with both the server and the clients. The necessary certificates are generated during the cluster setup and mounted as Kubernetes secrets. Three replicas of RabbitMQ are deployed to ensure high availability, and a `ClusterIP` service is created to allow internal communication within the cluster.
+
+## PostgreSQL :elephant:
+The PostgreSQL database is used to store user information for the X3DH server. It is managed using [CloudNativePG Operator](https://github.com/cloudnative-pg/cloudnative-pg), which simplifies the deployment and management of PostgreSQL clusters (_1 primary instance + 2 replicas_) on Kubernetes. The choice of using PostgreSQL is due to its robustness and reliability, making it suitable for production environments.
+
+A `pgAdmin` instance is also deployed to provide a web-based interface for managing the database. It is accessible via `localhost:30080` and can be used to verify that the database is correctly set up and to inspect the stored data.
+
+# How to run the demo :rocket:
+First of all, make sure to:
+- set the target for your ESP32 device (e.g. `esp32` or `esp32s3`),
+- use a valide WiFi credentials inside `client/main/app_main.c` file,
+- set the number of peers for VPN Server inside `k8s-deployment.yaml`,
+- update the Postgres env varibles inside `server/start.sh` and `server/server.py`,
+- choose an email and a password for _pgAdmin_ inside `pgadmin.yaml`,
+- retrieve the password to access the `x3dh_db` from _pgAdmin_ with:
+```bash
+kubectl get secret x3dh-db-cluster-app -n x3dh-project -o jsonpath='{.data.password}' | base64 -d
+```
+
+1. Start the Minikube cluster:
+```bash
+# Run this only the first time to create the cluster
+./create_service.sh 
+```
+
+```bash
+# Run this to start the cluster if you stopped it earlier
+minikube start
+```
+
+2. Generate the `keys.h` file for the client:
 ```bash
 python3 generate_keys.py <HOST_LOCAL_IP> <PEER_NUMBER>
 ```
 
-- **Preshared Key (PSK) compatibility:** the `esp_wireguard` client used does not support `PresharedKey`. For that reason the helper script `update_wg_config.sh` comments out `PresharedKey` lines in the server configuration and replaces `PostUp`/`PostDown` rules to ensure proper forwarding/NAT and add an MSS clamp to avoid MTU issues. The script writes a flag file so it runs only once.
-
-- **Runtime network notes:** `app_main.c` sets the WireGuard interface address from `WG_LOCAL_IP_ADDR` and, in the current code, forces a class-A netmask (`255.0.0.0`) and a gateway of `10.13.13.1`. The interface MTU is reduced to `1280` to prevent packet fragmentation/loss. If your network topology requires different netmask/gateway/MTU, update `keys.h` or modify `start_wireguard()` in `app_main.c` accordingly.
-
-> ⚠️ **Known Issue:** Due to **CGNAT** (Carrier-Grade NAT) used by mobile hotspot, the client may not be able to reach the WireGuard server. If you experience connectivity issues, please try to connect the MCU to a different network.
-  > If you are using a different client device (such as a PC), yet got the same issue, please check this [Kerem Erkan's post](https://keremerkan.net/posts/udp2raw-bypass-censoring-wireguard-protocol/).
-
-> ⛔️ **Known Limitation:** `esp_wireguard` does not support _Ethernet interface_.
-
-# How to run it
-1. Start the containers:
-```bash
-./start_service.sh
-```
-
-2. Set the target for the client:
-```bash
-cd client && get_idf
-idf.py set-target esp32
-```
-
 3. Build, flash and monitor the client:
 ```bash
+cd client && get_idf
 idf.py build
 idf.py -p PORT flash monitor
 ```
 
-## Flow
-The client will firstly connect to WiFi, then it will perform NTP time synchronization to get the correct time. After that, the WireGuard tunnel will be initialized to connect to the VPN Server. At this point, the client will be able to communicate with the X3DH Server, choosing one of the available options provided in the menu.
+## Flow :infinity:
+The `ESP32 client` will firstly connect to **WiFi**, then it will perform **NTP** time synchronization. After that, the **WireGuard tunnel** will be initialized to connect to the `VPN Server`, to securely communicate with `RabbitMQ broker`, ensuring end-to-end encryption and secure key exchange. The following menu will be displayed:
 
 <p align="center">
   <img width="48%" src="docs/menu.png">
