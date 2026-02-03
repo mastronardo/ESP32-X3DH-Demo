@@ -316,27 +316,3 @@ int hkdf(unsigned char *okm, size_t okm_len,
 
     return 0;
 }
-
-
-/** 
- * @brief Print data in hex format.
- * @param label Label to print before the hex data.
- * @param data Pointer to the binary data.
- * @param len Length of the binary data.
- */
-void print_hex(const char *label, const unsigned char *data, size_t len) {
-    // Allocate buffer for hex string
-    char *hex_buf = malloc(len * 2 + 1);
-    if (!hex_buf) {
-        ESP_LOGE(TAG, "Failed to allocate buffer for print_hex()");
-        return;
-    }
-    
-    for (size_t i = 0; i < len; ++i) {
-        sprintf(hex_buf + (i * 2), "%02x", data[i]);
-    }
-    hex_buf[len * 2] = '\0';
-    
-    ESP_LOGI(TAG, "%s: %s", label, hex_buf);
-    free(hex_buf);
-}

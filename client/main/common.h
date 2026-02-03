@@ -29,9 +29,6 @@ int hkdf(unsigned char *okm, size_t okm_len,
          const unsigned char *ikm, size_t ikm_len,
          const char *info);
 
-void print_hex(const char *label, const unsigned char *data, size_t len);
-
-// Entry point
 void run_x3dh_menu();
 
 #endif // COMMON_H

@@ -15,6 +15,7 @@
 #include <xeddsa.h>
 #include "common.h"
 #include "keys.h"
+#include "mqtt_manager.h"
 
 // Required for manual IP assignment
 #include "lwip/err.h"
@@ -76,6 +77,8 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "connected to ap");
@@ -129,12 +132,11 @@ void start_wireguard() {
     wg_config.endpoint = WG_ENDPOINT_IP;
     wg_config.port = WG_ENDPOINT_PORT;
     wg_config.public_key = WG_SERVER_PUB_KEY;
+    wg_config.persistent_keepalive = 25;
 
     // Routing (Allowed IPs)
-    wg_config.allowed_ip = "10.10.0.0"; 
-    wg_config.allowed_ip_mask = "255.255.0.0";
-
-    wg_config.persistent_keepalive = 25;
+    wg_config.allowed_ip = "0.0.0.0"; 
+    wg_config.allowed_ip_mask = "0.0.0.0";
     
     // Initialize
     ESP_ERROR_CHECK(esp_wireguard_init(&wg_config, &wg_ctx));
@@ -169,7 +171,7 @@ void start_wireguard() {
     netif_set_addr(wg_ctx.netif, &ip_addr, &netmask, &gw);
     
     // Lower MTU to prevent packet loss
-    wg_ctx.netif->mtu = 1280; 
+    wg_ctx.netif->mtu = 1280;
 
     netif_set_up(wg_ctx.netif);
     ESP_LOGI(TAG, "WireGuard Tunnel is up.");
@@ -192,6 +194,8 @@ void app_main(void) {
 
     // 4. Start VPN
     start_wireguard();
+    ESP_LOGI(TAG, "Waiting for WireGuard tunnel to stabilize...");
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     // 5. Initialize Crypto (Sodium/XEdDSA)
     if (xeddsa_init() == -1) {
@@ -199,7 +203,16 @@ void app_main(void) {
         return;
     }
 
-    // 6. Run X3DH Menu
-    ESP_LOGI(TAG, "Starting X3DH Client over VPN...");
-    xTaskCreate(run_x3dh_menu, "x3dh_task", 10240, NULL, 5, NULL);
+    // 6. Start MQTT Client
+    ESP_LOGI(TAG, "Starting MQTT Client...");
+    mqtt_app_start();
+    ESP_LOGI(TAG, "Waiting for MQTT connection...");
+    if (!mqtt_wait_for_connection(15000)) { // Wait up to 15 seconds
+        ESP_LOGE(TAG, "Failed to connect to MQTT Broker! Check certificates/VPN.");
+        return;
+    }
+
+    // 7. Run X3DH Menu
+    ESP_LOGI(TAG, "Starting X3DH client over VPN...");
+    xTaskCreate(run_x3dh_menu, "x3dh_task", 12288, NULL, 5, NULL);
 }
