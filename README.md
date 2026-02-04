@@ -22,6 +22,7 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - minikube: 1.38.0
   - Kubernetes: 1.35.0
   - Docker: 29.2.0
+  - containerd 2.2.1
 
 `X3DH Server`'s specifications:
 - OS: Alpine Linux 3.23.2
@@ -66,7 +67,7 @@ cd /Applications/Python\ 3.x/
 
 2. if you cannot see the ESP32 serial port after connecting it via USB, you might need to install the appropriate drivers. You could try to install the [WCH34 driver](https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html) and follow the installation guide from the official [repository](https://github.com/WCHSoftGroup/ch34xser_macos), or you could try to install the [Silicon Labs CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers).
 
-3. if you are using `minikube` with the `docker` driver, and you are facing this error _ERROR KubeletVersion_, you might need to execute this script: `down_service.sh`.
+3. if you are using `minikube` with `docker` as driver, and you are facing this error _ERROR KubeletVersion_, you might need to execute this script: `minikube_down.sh`.
 
 # How to build it 🛠️
 

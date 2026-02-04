@@ -3,8 +3,34 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-echo "--- Starting Minikube..."
-minikube start --driver=docker --ports=30000:30000/udp,30080:30080/tcp
+echo -e "--- Starting Minikube...\n"
+
+echo "Which container runtime would you like to use?"
+PS3='Please enter your choice (number): '
+options=("Docker" "Containerd" "Quit")
+select opt in "${options[@]}"
+do
+    case $opt in
+        "Docker")
+            echo "-------------------------------------"
+            minikube start --driver=docker --container-runtime=docker --ports=30000:30000/udp,30080:30080/tcp
+            break
+            ;;
+        "Containerd")
+            echo "-------------------------------------"
+            minikube start --driver=docker --container-runtime=containerd --ports=30000:30000/udp,30080:30080/tcp
+            break
+            ;;
+        "Quit")
+            echo "Exiting..."
+            exit 0
+            ;;
+        *) 
+            echo "Invalid option. Please choose a valid number."
+            ;;
+    esac
+done
+
 minikube addons enable metrics-server
 minikube addons enable headlamp
 minikube image load x3dh-server:1.1
