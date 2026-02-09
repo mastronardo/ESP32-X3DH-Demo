@@ -14,11 +14,11 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - clang: 17.0.0
 - cmake: 4.2.3 (at least 3.20)
 - ninja: 1.13.2
-- ccache: 4.12.2
+- ccache: 4.12.3
 - git: 2.52.0
 - dfu-util: 0.11
 - OpenSSL: 3.6.1
-- Docker Desktop: 4.59.1
+- Docker Desktop: 4.60.0
 - minikube: 1.38.0
   - Kubernetes: 1.35.0
   - Docker: 29.2.0
@@ -87,7 +87,7 @@ pip install -U pip # be sure to have the latest pip version
 pip install -U idf-component-manager # be sure to keep the component Manager updated
 
 idf.py add-dependency "espressif/libsodium^1.0.20~3"
-idf.py add-dependency "espressif/cjson^1.7.19"
+idf.py add-dependency "espressif/cjson^1.7.19~1"
 idf.py add-dependency "trombik/esp_wireguard^0.9.0"
 idf.py add-dependency "espressif/mqtt^1.0.0"
 ```
@@ -134,6 +134,8 @@ idf.py -p PORT erase-flash
 ## Minikube :whale:
 Make sure to have `minikube` installed on your machine. You can follow the official guide [here](https://minikube.sigs.k8s.io/docs/start/). The choice to use **minikube** is influenced by the fact that is a lightweight K8s instance that can be easily set up on a local machine, making it ideal for development and testing purposes. It allows us to create a local Kubernetes cluster without the need for complex infrastructure, which is perfect for this demo.
 
+The suggested Web UI is [Headlamp](https://github.com/kubernetes-sigs/headlamp), thanks to its user-friendly interface and powerful features for managing Kubernetes clusters. It provides an intuitive way to visualize and interact with the cluster resources, making it easier to monitor the status of the deployed components.
+
 ### X3DH Server
 The X3DH server is implemented in Python and runs inside a lean Docker container. To build the Docker image, you need to pull the base image and then build the custom image using the provided `Dockerfile`. The server interacts with a PostgreSQL database to store user info and uses TLSv1.3 for secure communication with broker. The database password can be retrieved from the Kubernetes secret created during the cluster setup.
 
@@ -144,6 +146,8 @@ sudo docker build -t x3dh-server:1.1 ./server
 ```
 
 ### VPN Configuration
+The VPN server was integrated into the demo to provide a secure communication channel between the ESP32 clients and the RabbitMQ broker. By using WireGuard, we can ensure that all data transmitted between the clients and the broker is encrypted and protected from potential eavesdropping or tampering. The VPN server runs inside a lightweight Docker container based on Alpine Linux, which keeps the resource usage low. The WireGuard configuration is set up to allow multiple clients to connect securely, and the necessary keys are generated during the cluster setup.
+
 Since the [esp_wireguard](https://github.com/trombik/esp_wireguard) repository is no longer maintained, if you try to use the component as it is, you are going to face issues with the newest versions of ESP-IDF. Mainly thanks to [issues](https://github.com/trombik/esp_wireguard/issues) opened during 2025, and [Kerem Erkan's post](https://keremerkan.net/posts/wireguard-mtu-fixes/) about MTU fixes, it was possible to make the component work again.
 
 - **Overview:** the MCU performs NTP time synchronization and initializes the WireGuard tunnel. All runtime parameters used by the client are provided via the generated header `keys.h`.
@@ -207,4 +211,11 @@ The `ESP32 client` will firstly connect to **WiFi**, then it will perform **NTP*
 
 <p align="center">
   <img width="48%" src="docs/menu.png">
+</p>
+
+# Schema
+The following schema illustrates the architecture of the demo, showing how the different components interact with each other:
+
+<p align="center">
+  <img width="50%" src="docs/schema.png">
 </p>
