@@ -37,7 +37,7 @@ bool mqtt_wait_for_connection(uint32_t timeout_ms) {
  * @param event_id Event ID.
  * @param event_data Event data.
  */
-static void mqtt_event_handler(esp_event_base_t base, int32_t event_id, void *event_data) {
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t event = event_data;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
