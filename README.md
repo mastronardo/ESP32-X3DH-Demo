@@ -18,7 +18,7 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - git: 2.52.0
 - dfu-util: 0.11
 - OpenSSL: 3.6.1
-- Docker Desktop: 4.60.0
+- Docker Desktop: 4.60.1
 - minikube: 1.38.0
   - Kubernetes: 1.35.0
   - Docker: 29.2.0
@@ -217,5 +217,5 @@ The `ESP32 client` will firstly connect to **WiFi**, then it will perform **NTP*
 The following schema illustrates the architecture of the demo, showing how the different components interact with each other:
 
 <p align="center">
-  <img width="50%" src="docs/schema.png">
+  <img width="100%" src="docs/schema.png">
 </p>
