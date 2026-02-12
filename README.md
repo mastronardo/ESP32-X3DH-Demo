@@ -5,7 +5,7 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 
 ## Specifications :desktop_computer:
 `Host`'s specifications:
-- OS: macOS 26.2
+- OS: macOS 26.3
 - Architecture: arm64
 - CPU : Apple M2 (8)
 - RAM : 8 GB
@@ -15,7 +15,7 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - cmake: 4.2.3 (at least 3.20)
 - ninja: 1.13.2
 - ccache: 4.12.3
-- git: 2.52.0
+- git: 2.53.0
 - dfu-util: 0.11
 - OpenSSL: 3.6.1
 - Docker Desktop: 4.60.1
@@ -130,6 +130,13 @@ Since we are going to store the keys in the NVS memory, it is recommended to era
 ```bash
 idf.py -p PORT erase-flash
 ```
+
+### Binary file size
+With ESP-IDF VS Code extension, you can easily check the size of the generated binary file after building the project. The following table shows the size of the different memory sections for the generated binary file:
+
+| Flash Code | Flash Data | IRAM      | DRAM      | RTC SLOW |
+|:----------:|:----------:|:---------:|:---------:|:---------:|
+| 868KB      | 164KB      | 96KB/128KB|65KB/177KB | 0KB/8KB   |
 
 ## Minikube :whale:
 Make sure to have `minikube` installed on your machine. You can follow the official guide [here](https://minikube.sigs.k8s.io/docs/start/). The choice to use **minikube** is influenced by the fact that is a lightweight K8s instance that can be easily set up on a local machine, making it ideal for development and testing purposes. It allows us to create a local Kubernetes cluster without the need for complex infrastructure, which is perfect for this demo.
