@@ -131,7 +131,7 @@ char* mqtt_rpc_call(const char* topic, cJSON *payload) {
     }
 
     // Wait for response
-    if (xSemaphoreTake(s_response_sem, pdMS_TO_TICKS(10000)) == pdTRUE) {
+    if (xSemaphoreTake(s_response_sem, pdMS_TO_TICKS(20000)) == pdTRUE) {
         char *ret = strdup(s_response_buffer);
         free(s_response_buffer); s_response_buffer = NULL;
         return ret;
