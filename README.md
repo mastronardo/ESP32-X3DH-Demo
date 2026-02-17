@@ -7,7 +7,7 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 `Host`'s specifications:
 - OS: macOS 26.3
 - Architecture: arm64
-- CPU : Apple M2 (8)
+- CPU : Apple M2 (8) @ 3.50 GHz
 - RAM : 8 GB
 - Command Line Tools for Xcode: 26.2
 - Python: 3.12.10 (at least 3.9)
@@ -22,7 +22,6 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - minikube: 1.38.0
   - Kubernetes: 1.35.0
   - Docker: 29.2.0
-  - containerd 2.2.1
 
 `X3DH Server`'s specifications:
 - OS: Alpine Linux 3.23.2
@@ -212,6 +211,12 @@ cd client && get_idf
 idf.py build
 idf.py -p PORT flash monitor
 ```
+
+> :exclamation: **Known Issue:** Do not use **containerd** as container runtime for minikube, since the MCU will not be able to reach the WireGuard server. Specifically, you might encounter these errors:
+- `esp-tls: [sock=54] select() timeout`
+- `esp-tls: Failed to open new connection`
+- `transport_base: Failed to open a new connection`
+- `mqtt_client: Error transport connect`
 
 ## Flow :infinity:
 The `ESP32 client` will firstly connect to **WiFi**, then it will perform **NTP** time synchronization. After that, the **WireGuard tunnel** will be initialized to connect to the `VPN Server`, to securely communicate with `RabbitMQ broker`, ensuring end-to-end encryption and secure key exchange. The following menu will be displayed:
