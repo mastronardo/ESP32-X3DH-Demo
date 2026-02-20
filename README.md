@@ -18,10 +18,11 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - git: 2.53.0
 - dfu-util: 0.11
 - OpenSSL: 3.6.1
-- Docker Desktop: 4.60.1
+- Docker Desktop: 4.61.0
 - minikube: 1.38.0
   - Kubernetes: 1.35.0
   - Docker: 29.2.0
+  - containerd 2.2.1
 
 `X3DH Server`'s specifications:
 - OS: Alpine Linux 3.23.2
@@ -212,7 +213,7 @@ idf.py build
 idf.py -p PORT flash monitor
 ```
 
-> :exclamation: **Known Issue:** Do not use **containerd** as container runtime for minikube, since the MCU will not be able to reach the WireGuard server. Specifically, you might encounter these errors:
+> :exclamation: **Known Issue:** If you get these errors, you should check your network connection and VPN configuration, and make sure that the client can reach the broker through the VPN tunnel. If the issue persists, try to restart the host machine and the client, or to increase timeout values and stack size for the client.
 - `esp-tls: [sock=54] select() timeout`
 - `esp-tls: Failed to open new connection`
 - `transport_base: Failed to open a new connection`
