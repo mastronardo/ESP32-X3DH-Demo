@@ -118,7 +118,10 @@ After that, the following files inside the `libxeddsa` directory were been modif
 5. To enable MQTT 5.0 and disable MQTT 3.1.1:
   - `(Top)` → `Component config` → `ESP-MQTT Configurations` → `Enable MQTT protocol 5.0`
   - `(Top)` → `Component config` → `ESP-MQTT Configurations` → `Enable MQTT protocol 3.1.1` _(disable)_
-6. To force using TLSv1.3:
+6. To avoid connection issues when running the project, it is recommended to increase the MQTT buffer and stack sizes:
+  - `(Top)` → `Component config` → `ESP-MQTT Configurations` → `MQTT Using custom configurations` → `Default MQTT Buffer Size` → `2048`
+  - `(Top)` → `Component config` → `ESP-MQTT Configurations` → `MQTT Using custom configurations` → `MQTT task stack size` → `8192`
+7. To force using TLSv1.3:
   - `(Top)` → `Component config` → `mbedTLS` → `mbedTLS v3.x related` → `Support TLS 1.3 protocol`
   - `(Top)` → `Component config` → `mbedTLS` → `Support TLS 1.2 protocol` _(disable)_
 
