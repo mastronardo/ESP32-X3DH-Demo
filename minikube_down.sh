@@ -5,5 +5,5 @@ set -e
 
 echo "--- Deleting all Minikube resources..."
 minikube delete
-rm -rf ~/.minikube/
+rm -rf ~/.kube ~/.minikube
 rm -rf certs/
