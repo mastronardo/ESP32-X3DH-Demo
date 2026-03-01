@@ -9,7 +9,7 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - Architecture: arm64
 - CPU : Apple M2 (8) @ 3.50 GHz
 - RAM : 8 GB
-- Command Line Tools for Xcode: 26.2
+- Command Line Tools for Xcode: 26.3
 - Python: 3.12.10 (at least 3.9)
 - clang: 17.0.0
 - cmake: 4.2.3 (at least 3.20)
@@ -54,6 +54,12 @@ This project demonstrates how to securely communicate ESP32 microcontrollers usi
 - MbedTLS: 3.6.4
 - esp_wireguard: 0.9.0
 - ESP-MQTT: 1.0.0
+
+`Raspberry Pi 4 Model B`'s specifications:
+- OS: Raspbian GNU/Linux 12
+- Architecture: arm64
+- CPU: BCM2711 (4) @ 1.80 GHz
+- RAM: 8 GB
 
 ## macOS issues :sos:
 
@@ -235,3 +241,25 @@ The following schema illustrates the architecture of the demo, showing how the d
 <p align="center">
   <img width="100%" src="docs/schema.png">
 </p>
+
+# Energy Consumption :battery
+To measure the energy consumption needed by the ESP32 to perform the X3DH protocol (under the above-mentioned architecture), the following electrical schema was used.
+
+<p align="center">
+  <img width="90%" src="docs/elactrical_schema.png">
+</p>
+
+Acting as the primary control unit, a Raspberry Pi 4 interfaced with the INA219 sensor via the I2C (Inter-Integrated Circuit) protocol. This standard enables synchronous, serial communication within a multi-master multi-slave architecture, relying entirely on just two dedicated lines: Serial Data (SDA) and Serial Clock (SCL). The sensor is able to measure the main physical quantities consumed by the ESP because they are connected together through a USB powered switch. The MCU sends signals through GPIO to Raspberry Pi 4 to start/stop saving the energy measurement data. In addition, the MCU sends a signal to a Relay to power on the green led when the secret key is generated. Lastly, the GND is in common among all devices.
+
+## Results and Analysis
+To provide a clear overview of the device’s energy profile, the energy detection was
+performed during both steady and execution modes.
+In its steady state, the device operates at 3.28V and draws approximately 330mA, establishing a baseline power consumption of roughly 1080mW. During the execution of the protocol, the voltage is the same, whereas the average current draw increases to 466mA, resulting in an average power consumption of 1528.55mW.
+
+Given the mathematical complexity of the Extended Triple Diffie-Hellman protocol, the energy overhead of approximately 500mW is notably modest. The ability to execute advanced, secure cryptographic handshakes locally without inducing prohibitive energy spikes demonstrates that the ESP32 is not merely a passive IoT node, but a highly capable Edge device.
+
+| Physical Quantity  | Average | Std Dev   | Lower CI 95% | Upper CI 95% |
+|:------------------:|:-------:|:---------:|:------------:|:------------:|
+| Voltage (V)        | 3.28    | 0.0       | 3.28         | 3.28         |
+| Current (mA)       | 466.01  | 17.35     | 453.60       | 478.42       |
+| Power (mW)         | 1528.55 | 56.94     | 1487.82      | 1569.28      |
