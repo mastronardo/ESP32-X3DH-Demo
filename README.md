@@ -242,11 +242,11 @@ The following schema illustrates the architecture of the demo, showing how the d
   <img width="100%" src="docs/schema.png">
 </p>
 
-# Energy Consumption :battery
+# Energy Consumption :battery:
 To measure the energy consumption needed by the ESP32 to perform the X3DH protocol (under the above-mentioned architecture), the following electrical schema was used.
 
 <p align="center">
-  <img width="90%" src="docs/elactrical_schema.png">
+  <img width="90%" src="docs/electrical_schema.png">
 </p>
 
 Acting as the primary control unit, a Raspberry Pi 4 interfaced with the INA219 sensor via the I2C (Inter-Integrated Circuit) protocol. This standard enables synchronous, serial communication within a multi-master multi-slave architecture, relying entirely on just two dedicated lines: Serial Data (SDA) and Serial Clock (SCL). The sensor is able to measure the main physical quantities consumed by the ESP because they are connected together through a USB powered switch. The MCU sends signals through GPIO to Raspberry Pi 4 to start/stop saving the energy measurement data. In addition, the MCU sends a signal to a Relay to power on the green led when the secret key is generated. Lastly, the GND is in common among all devices.
